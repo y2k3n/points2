@@ -12,6 +12,7 @@
 #include <set>
 #include <unordered_map>
 #include <vector>
+#include <chrono>
 
 using namespace llvm;
 
@@ -55,8 +56,9 @@ void printGroups() {
   }
   for (auto &[key, group] : groups) {
     for (auto val : group) {
-      if (points2.find(val) != points2.end())
-        gp2[val].insert(points2[val]);
+      if (points2.find(val) != points2.end()) {
+        gp2[key].insert(findDS(points2[val]));
+      }
     }
   }
   for (auto &[key, group] : groups) {
@@ -164,6 +166,9 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
+  outs() << "Steensgaard's analysis\n";
+  outs() << module->getFunctionList().size() << " function(s)\n";
+  auto start = std::chrono::high_resolution_clock::now();
   for (auto &func : *module) {
     if (func.isDeclaration())
       continue;
@@ -181,5 +186,11 @@ int main(int argc, char *argv[]) {
     // printGroups();
     // outs() << "******************************** " << func.getName() << "\n";
   }
+  auto end = std::chrono::high_resolution_clock::now();
+  auto duration =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+  outs() << "Analysis time: " << duration.count() << " ms\n";
+#ifdef PRINT_RESULTS
   printGroups();
+#endif
 }

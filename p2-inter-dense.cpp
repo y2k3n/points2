@@ -1,4 +1,8 @@
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/IR/Argument.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -13,40 +17,53 @@
 #include <queue>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 using namespace llvm;
 
-std::unordered_map<Value *, std::set<Value *>> pt;
-std::queue<std::pair<Value *, std::set<Value *>>> worklist;
-std::unordered_map<Value *, std::set<Value *>> PFG;
+std::unordered_map<Value *, DenseSet<Value *>> pt;
+// std::queue<std::pair<Value *, DenseSet<Value *>>> worklist;
+DenseMap<Value *, DenseSet<Value *>> WLMap;
+std::unordered_map<Value *, DenseSet<Value *>> PFG;
+std::unordered_set<Value *> RM;
+
+void worklistPush(Value *key, const DenseSet<Value *> &sset) {
+  auto it = WLMap.find(key);
+  if (it != WLMap.end()) {
+    it->second.insert(sset.begin(), sset.end());
+  } else {
+    WLMap[key] = sset;
+  }
+}
 
 void addEdge(Value *s, Value *t) {
   if (PFG[s].find(t) == PFG[s].end()) {
     PFG[s].insert(t);
     if (!pt[s].empty()) {
-      worklist.push({t, pt[s]});
+      worklistPush(t, pt[s]);
     }
   }
 }
 
-void propagate(Value *n, const std::set<Value *> &pts) {
+void propagate(Value *n, const DenseSet<Value *> &pts) {
   if (!pts.empty()) {
     pt[n].insert(pts.begin(), pts.end());
     for (auto *s : PFG[n]) {
-      worklist.push({s, pts});
+      worklistPush(s, pts);
     }
   }
 }
 
+void addReachable(Function *func);
 void initialize(Function &func) {
   for (auto &BB : func) {
     for (auto &inst : BB) {
 
       if (auto *alloca = dyn_cast<AllocaInst>(&inst)) {
-        worklist.push({alloca, {alloca}});
+        worklistPush(alloca, {alloca});
 
       } else if (auto *gep = dyn_cast<GetElementPtrInst>(&inst)) {
-        worklist.push({gep, {gep}});
+        worklistPush(gep, {gep});
 
       } else if (auto *phi = dyn_cast<PHINode>(&inst)) {
         for (int i = 0; i < phi->getNumIncomingValues(); ++i) {
@@ -71,19 +88,63 @@ void initialize(Function &func) {
         addEdge(src, cast);
       }
 
+      else if (auto *call = dyn_cast<CallInst>(&inst)) {
+        auto *cf = call->getCalledFunction();
+        if (!cf || cf->isDeclaration())
+          continue;
+        for (int i = 0; i < call->arg_size(); ++i) {
+          if (i < cf->arg_size()) {
+            addEdge(call->getArgOperand(i), cf->getArg(i));
+          }
+        }
+        if (!cf->getReturnType()->isVoidTy()) {
+          for (auto &cfBB : *cf) {
+            for (auto &cfinst : cfBB) {
+              if (auto *ret = llvm::dyn_cast<llvm::ReturnInst>(&cfinst)) {
+                Value *retVal = ret->getReturnValue();
+                if (retVal)
+                  addEdge(retVal, call);
+              }
+            }
+          }
+        }
+        addReachable(cf);
+      }
+
       // iter end
     }
   }
 }
 
-void solve() {
-  while (!worklist.empty()) {
-    auto [n, pts] = worklist.front();
-    worklist.pop();
+void addReachable(Function *func) {
+  // outs() << "Reach function: " << func->getName() << "\n";
+  if (RM.find(func) != RM.end()) {
+    // outs() << "Already exist\n";
+    return;
+  }
+  RM.insert(func);
+  // errs() << "Reach " << func->getName() << " (" << RM.size() << ")\n";
+  // TODO: Sm ?????
+  initialize(*func);
+}
 
-    std::set<Value *> delta;
-    std::set_difference(pts.begin(), pts.end(), pt[n].begin(), pt[n].end(),
-                        std::inserter(delta, delta.begin()));
+void solve() {
+  while (!WLMap.empty()) {
+    // errs() << "worklist size=" << worklist.size() << "\n";
+    auto it = WLMap.begin();
+    auto n = it->first;
+    auto pts = it->second;
+    WLMap.erase(it);
+
+    DenseSet<Value *> delta;
+    // DenseSet_difference(pts.begin(), pts.end(), pt[n].begin(), pt[n].end(),
+    //                     std::inserter(delta, delta.begin()));
+    for (auto &i : pts) {
+      if (!pt[n].contains(i)) {
+        delta.insert(i);
+      }
+    }
+
     propagate(n, delta);
 
     for (auto *user : n->users()) {
@@ -116,11 +177,14 @@ void print() {
   outs() << "Points-to Set:\n";
   outs() << "=================\n";
   for (auto &[p, points2] : pt) {
-    outs() << *p << "\n->";
-    for (Value *v : points2) {
-      outs() << "\t" << *v << "\n";
+    outs() << "\n" << *p << "\n->";
+    if (points2.empty()) {
+      outs() << "\tno points-to target\n";
+    } else {
+      for (Value *v : points2) {
+        outs() << "\t" << *v << "\n";
+      }
     }
-    outs() << "\n";
   }
 
   // outs() << "Pointer Flow Graph:\n";
@@ -150,18 +214,16 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  outs() << "Intra-Function Analysis" << "\n";
-  for (auto &func : *module) {
-    if (func.isDeclaration())
-      continue;
-
-    pt.clear();
-    PFG.clear();
-
-    // outs() << "\nFunction: " << func.getName() << "\n";
-    initialize(func);
-    solve();
-    // print();
-    // outs() << "******************************** " << func.getName() << "\n";
+  Function *mainFunc = module->getFunction("main");
+  if (!mainFunc) {
+    outs() << "Cannot find main function.\n";
+    return 0;
   }
+
+  outs() << "Inter-Function Analysis" << "\n";
+  errs() << module->getFunctionList().size() << " function(s)\n";
+  addReachable(mainFunc);
+  errs() << "Solving...\n";
+  solve();
+  print();
 }

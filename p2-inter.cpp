@@ -1,3 +1,6 @@
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
@@ -19,15 +22,25 @@
 using namespace llvm;
 
 std::unordered_map<Value *, std::set<Value *>> pt;
-std::queue<std::pair<Value *, std::set<Value *>>> worklist;
+// std::queue<std::pair<Value *, std::set<Value *>>> worklist;
+DenseMap<Value *, std::set<Value *>> WLMap;
 std::unordered_map<Value *, std::set<Value *>> PFG;
 std::unordered_set<Value *> RM;
+
+void worklistPush(Value *key, const std::set<Value *> &sset) {
+  auto it = WLMap.find(key);
+  if (it != WLMap.end()) {
+    it->second.insert(sset.begin(), sset.end());
+  } else {
+    WLMap[key] = sset;
+  }
+}
 
 void addEdge(Value *s, Value *t) {
   if (PFG[s].find(t) == PFG[s].end()) {
     PFG[s].insert(t);
     if (!pt[s].empty()) {
-      worklist.push({t, pt[s]});
+      worklistPush(t, pt[s]);
     }
   }
 }
@@ -36,22 +49,21 @@ void propagate(Value *n, const std::set<Value *> &pts) {
   if (!pts.empty()) {
     pt[n].insert(pts.begin(), pts.end());
     for (auto *s : PFG[n]) {
-      worklist.push({s, pts});
+      worklistPush(s, pts);
     }
   }
 }
 
 void addReachable(Function *func);
 void initialize(Function &func) {
-  outs() << "Init: " << func.getName() << "\n";
   for (auto &BB : func) {
     for (auto &inst : BB) {
 
       if (auto *alloca = dyn_cast<AllocaInst>(&inst)) {
-        worklist.push({alloca, {alloca}});
+        worklistPush(alloca, {alloca});
 
       } else if (auto *gep = dyn_cast<GetElementPtrInst>(&inst)) {
-        worklist.push({gep, {gep}});
+        worklistPush(gep, {gep});
 
       } else if (auto *phi = dyn_cast<PHINode>(&inst)) {
         for (int i = 0; i < phi->getNumIncomingValues(); ++i) {
@@ -104,21 +116,25 @@ void initialize(Function &func) {
   }
 }
 
-void addReachable(Function* func){
-  outs() << "Reach function: " << func->getName() << "\n";
+void addReachable(Function *func) {
+  // outs() << "Reach function: " << func->getName() << "\n";
   if (RM.find(func) != RM.end()) {
-    outs() << "Already exist\n";
+    // outs() << "Already exist\n";
     return;
   }
   RM.insert(func);
+  // errs() << "Reach " << func->getName() << " (" << RM.size() << ")\n";
   // TODO: Sm ?????
   initialize(*func);
 }
 
 void solve() {
-  while (!worklist.empty()) {
-    auto [n, pts] = worklist.front();
-    worklist.pop();
+  while (!WLMap.empty()) {
+    // errs() << "worklist size=" << worklist.size() << "\n";
+    auto it = WLMap.begin();
+    auto n = it->first;
+    auto pts = it->second;
+    WLMap.erase(it);
 
     std::set<Value *> delta;
     std::set_difference(pts.begin(), pts.end(), pt[n].begin(), pt[n].end(),
@@ -199,8 +215,9 @@ int main(int argc, char *argv[]) {
   }
 
   outs() << "Inter-Function Analysis" << "\n";
-
+  errs() << module->getFunctionList().size() << " function(s)\n";
   addReachable(mainFunc);
+  errs() << "Solving...\n";
   solve();
-  print();
+  // print();
 }
