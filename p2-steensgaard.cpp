@@ -1,3 +1,4 @@
+#include "llvm/IR/Argument.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -10,78 +11,126 @@
 
 #include <unordered_map>
 #include <vector>
+#include <set>
 
 using namespace llvm;
 
-class DisjointSet {
-private:
-  std::unordered_map<Value *, Value *> parent;
-  std::unordered_map<Value *, int> rank;
+std::unordered_map<Value *, Value *> ds_parent;
+std::unordered_map<Value *, int> ds_rank;
+std::unordered_map<Value *, Value *> points2;
 
-public:
-  std::unordered_map<Value *, Value *> points2;
-
-  Value *find(Value *x) {
-    if (parent.find(x) == parent.end()) {
-      parent[x] = x;
-      rank[x] = 0;
-      return x;
-    }
-    if (x != parent[x]) {
-      parent[x] = find(parent[x]);
-    }
-    return parent[x];
+Value *findDS(Value *x) {
+  if (ds_parent.find(x) == ds_parent.end()) {
+    ds_parent[x] = x;
+    ds_rank[x] = 0;
+    return x;
   }
+  if (x != ds_parent[x]) {
+    ds_parent[x] = findDS(ds_parent[x]);
+  }
+  return ds_parent[x];
+}
 
-  void union_(Value *p, Value *q) {
-    Value *x = find(p);
-    Value *y = find(q);
-    if (x == y)
-      return;
-    if (rank[x] < rank[y]) {
-      parent[x] = y;
-    } else if (rank[x] > rank[y]) {
-      parent[y] = x;
-    } else {
-      parent[y] = x;
-      rank[x]++;
+void unionDS(Value *p, Value *q) {
+  Value *x = findDS(p);
+  Value *y = findDS(q);
+  if (x == y)
+    return;
+  if (ds_rank[x] < ds_rank[y]) {
+    ds_parent[x] = y;
+  } else if (ds_rank[x] > ds_rank[y]) {
+    ds_parent[y] = x;
+  } else {
+    ds_parent[y] = x;
+    ds_rank[x]++;
+  }
+}
+
+void printGroups() {
+  std::unordered_map<Value *, std::vector<Value *>> groups;
+  std::unordered_map<Value*, std::set<Value*>> gp2;
+  for (auto [key, val] : ds_parent) {
+    Value *root = findDS(key);
+    groups[root].push_back(key);
+  }
+  for (auto& [key, group] : groups) {
+    for (auto val : group) {
+      if (points2.find(val) != points2.end())
+        gp2[val].insert(points2[val]);
     }
   }
-
-  std::unordered_map<Value *, std::vector<Value *>> groups() {
-    std::unordered_map<Value *, std::vector<Value *>> groups;
-    for (auto [key, val] : parent) {
-      Value *root = find(val);
-      groups[root].push_back(key);
+  for (auto &[key, group] : groups) {
+    outs() << "\nGroup "<< key << ": {";
+    for (auto val : group) {
+      outs() << "\n" << *val;
     }
-    return groups;
+    outs() << "\n}\nPoints-to group(s): {";
+    for (auto val : gp2[key]) {
+      outs() << " " << val;
+    }
+    outs() << " }\n";
   }
-};
+}
 
-void steensgaard(Instruction *inst, DisjointSet &ds) {
+void steensgaard(Instruction *inst) {
   if (auto *ac = dyn_cast<AllocaInst>(inst)) {
-    ds.find(ac);
-    ds.points2[ac] = ac;
+    findDS(ac);
+    points2[ac] = ac;
 
   } else if (auto *ld = dyn_cast<LoadInst>(inst)) {
     // [p := *q] -> join(*p, **q)
     auto *q = ld->getPointerOperand();
-    if (ds.points2.find(q) == ds.points2.end()) {
-      ds.points2[q] = ld; // ?????
+    if (points2.find(q) == points2.end()) {
+      findDS(q);
+      findDS(ld);
+      points2[q] = ld;
     } else {
-      ds.union_(ld, ds.points2[q]);
+      unionDS(points2[q], ld);
     }
 
   } else if (auto *st = dyn_cast<StoreInst>(inst)) {
     // [*p := q] -> join(**p, *q)
     auto *p = st->getPointerOperand();
     auto *q = st->getValueOperand();
-    if (ds.points2.find(p) == ds.points2.end()) {
-      ds.points2[p] = q;
-    } else {
-      ds.union_(ds.points2[p], q);
+    if (isa<Instruction>(q) || isa<Argument>(q)) {
+      if (points2.find(p) == points2.end()) {
+        findDS(p);
+        findDS(q);
+        points2[p] = q;
+      } else {
+        unionDS(points2[p], q);
+      }
     }
-  } 
+  } else if (PHINode *phi = dyn_cast<PHINode>(inst)) {
+    // join incoming ptrs with phi var
+    for (int i = 0; i < phi->getNumIncomingValues(); ++i) {
+      auto *val = phi->getIncomingValue(i);
+      if (isa<Instruction>(val) || isa<Argument>(val)) {
+        unionDS(phi, val);
+      }
+    }
+  } else if (auto *call = dyn_cast<CallInst>(inst)) {
+    auto *cf = call->getCalledFunction();
+    if (!cf || cf->isDeclaration())
+      return;
+    for (int i = 0; i < call->arg_size(); ++i) {
+      if (i < cf->arg_size()) {
+        unionDS(call->getArgOperand(i), cf->getArg(i));
+      }
+    }
+    if (!cf->getReturnType()->isVoidTy()) {
+      for (auto &cfBB : *cf) {
+        for (auto &cfinst : cfBB) {
+          if (auto *ret = llvm::dyn_cast<llvm::ReturnInst>(&cfinst)) {
+            Value *retVal = ret->getReturnValue();
+            if (retVal)
+              unionDS(retVal, call);
+          }
+        }
+      }
+    }
+  }
+
   // else if (auto *call = dyn_cast<CallInst>(inst)) {
   //   // join passed ptrs with ret val
   //   std::vector<Value *> vals;
@@ -97,18 +146,10 @@ void steensgaard(Instruction *inst, DisjointSet &ds) {
   //   if (vals.size() <= 1)
   //     return;
   //   for (int i = 1; i < vals.size(); ++i) {
-  //     ds.union_(vals[0], vals[i]);
+  //     union_(vals[0], vals[i]);
   //   }
 
-  // } else if (PHINode *phi = dyn_cast<PHINode>(inst)) {
-  //   // join incoming ptrs with phi var
-  //   for (int i = 0; i < phi->getNumIncomingValues(); ++i) {
-  //     auto *val = phi->getIncomingValue(i);
-  //     if (val->getType()->isPointerTy()) {
-  //       ds.union_(phi, val);
-  //     }
-  //   }
-  // }
+  
 }
 
 int main(int argc, char *argv[]) {
@@ -127,21 +168,22 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  DisjointSet ds;
   for (auto &func : *module) {
+    if (func.isDeclaration())
+      continue;
+
+    // ds_parent.clear();
+    // ds_rank.clear();
+    // points2.clear();
+
     for (auto &BB : func) {
       for (auto &inst : BB) {
-        steensgaard(&inst, ds);
+        steensgaard(&inst);
       }
     }
+    // outs() << "\nFunction: " << func.getName() << "\n";
+    // printGroups();
+    // outs() << "******************************** " << func.getName() << "\n";
   }
-
-  auto groups = ds.groups();
-  for (auto [key, group] : groups) {
-    outs() << "{\n";
-    for (auto val : group) {
-      outs() << "\t" << *val << "\n";
-    }
-    outs() << "}\n";
-  }
+  printGroups();
 }

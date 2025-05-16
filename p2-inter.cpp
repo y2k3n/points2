@@ -88,8 +88,11 @@ void initialize(Function &func) {
         if (!cf->getReturnType()->isVoidTy()) {
           for (auto &cfBB : *cf) {
             for (auto &cfinst : cfBB) {
-              if (auto *ret = llvm::dyn_cast<llvm::ReturnInst>(&inst))
-                addEdge(ret, call);
+              if (auto *ret = llvm::dyn_cast<llvm::ReturnInst>(&cfinst)) {
+                Value *retVal = ret->getReturnValue();
+                if (retVal)
+                  addEdge(retVal, call);
+              }
             }
           }
         }
