@@ -9,9 +9,9 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <set>
 #include <unordered_map>
 #include <vector>
-#include <set>
 
 using namespace llvm;
 
@@ -48,19 +48,19 @@ void unionDS(Value *p, Value *q) {
 
 void printGroups() {
   std::unordered_map<Value *, std::vector<Value *>> groups;
-  std::unordered_map<Value*, std::set<Value*>> gp2;
+  std::unordered_map<Value *, std::set<Value *>> gp2;
   for (auto [key, val] : ds_parent) {
     Value *root = findDS(key);
     groups[root].push_back(key);
   }
-  for (auto& [key, group] : groups) {
+  for (auto &[key, group] : groups) {
     for (auto val : group) {
       if (points2.find(val) != points2.end())
         gp2[val].insert(points2[val]);
     }
   }
   for (auto &[key, group] : groups) {
-    outs() << "\nGroup "<< key << ": {";
+    outs() << "\nGroup " << key << ": {";
     for (auto val : group) {
       outs() << "\n" << *val;
     }
@@ -101,6 +101,7 @@ void steensgaard(Instruction *inst) {
         unionDS(points2[p], q);
       }
     }
+
   } else if (PHINode *phi = dyn_cast<PHINode>(inst)) {
     // join incoming ptrs with phi var
     for (int i = 0; i < phi->getNumIncomingValues(); ++i) {
@@ -109,6 +110,21 @@ void steensgaard(Instruction *inst) {
         unionDS(phi, val);
       }
     }
+
+  } else if (auto *select = dyn_cast<SelectInst>(inst)) {
+    Value *tval = select->getTrueValue();
+    Value *fval = select->getFalseValue();
+    if (isa<Instruction>(tval) || isa<Argument>(tval)) {
+      unionDS(tval, select);
+    }
+    if (isa<Instruction>(fval) || isa<Argument>(fval)) {
+      unionDS(fval, select);
+    }
+
+  } else if (auto *cast = dyn_cast<CastInst>(inst)) {
+    Value *src = cast->getOperand(0);
+    unionDS(src, cast);
+
   } else if (auto *call = dyn_cast<CallInst>(inst)) {
     auto *cf = call->getCalledFunction();
     if (!cf || cf->isDeclaration())
@@ -130,26 +146,6 @@ void steensgaard(Instruction *inst) {
       }
     }
   }
-
-  // else if (auto *call = dyn_cast<CallInst>(inst)) {
-  //   // join passed ptrs with ret val
-  //   std::vector<Value *> vals;
-  //   if (!call->getType()->isVoidTy()) {
-  //     vals.push_back(call);
-  //   }
-  //   auto *cf = call->getCalledFunction();
-  //   for (auto &arg : cf->args()) {
-  //     if (arg.getType()->isPointerTy()) {
-  //       vals.push_back(&arg);
-  //     }
-  //   }
-  //   if (vals.size() <= 1)
-  //     return;
-  //   for (int i = 1; i < vals.size(); ++i) {
-  //     union_(vals[0], vals[i]);
-  //   }
-
-  
 }
 
 int main(int argc, char *argv[]) {

@@ -71,9 +71,9 @@ void initialize(Function &func) {
           addEdge(fval, select);
         }
 
-      } else if (auto *bitcast = dyn_cast<BitCastInst>(&inst)) {
-        Value *src = bitcast->getOperand(0);
-        addEdge(src, bitcast);
+      } else if (auto *cast = dyn_cast<CastInst>(&inst)) {
+        Value *src = cast->getOperand(0);
+        addEdge(src, cast);
       }
 
       else if (auto *call = dyn_cast<CallInst>(&inst)) {
