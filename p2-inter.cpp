@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  outs() << "Inter-Function Analysis" << "\n";
+  outs() << "Inter-Procedural Analysis" << "\n";
   errs() << module->getFunctionList().size() << " function(s)\n";
   addReachable(mainFunc);
   errs() << "Solving...\n";

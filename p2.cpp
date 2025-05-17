@@ -13,6 +13,7 @@
 #include <queue>
 #include <set>
 #include <unordered_map>
+#include <chrono>
 
 using namespace llvm;
 
@@ -150,7 +151,10 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  outs() << "Intra-Function Analysis" << "\n";
+  outs() << "Intra-Procedural Analysis" << "\n";
+  outs() << module->getFunctionList().size() << " function(s)\n";
+  auto start = std::chrono::high_resolution_clock::now();
+
   for (auto &func : *module) {
     if (func.isDeclaration())
       continue;
@@ -158,10 +162,18 @@ int main(int argc, char *argv[]) {
     pt.clear();
     PFG.clear();
 
-    // outs() << "\nFunction: " << func.getName() << "\n";
     initialize(func);
     solve();
-    // print();
-    // outs() << "******************************** " << func.getName() << "\n";
+
+#ifdef PRINT_RESULTS
+    outs() << "\nFunction: " << func.getName() << "\n";
+    print();
+    outs() << "******************************** " << func.getName() << "\n";
+#endif
   }
+
+  auto end = std::chrono::high_resolution_clock::now();
+  auto duration =
+      std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  outs() << "Analysis time: " << duration.count() << " us\n";
 }

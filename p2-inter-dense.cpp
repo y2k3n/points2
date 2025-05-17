@@ -14,6 +14,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <chrono>
 #include <queue>
 #include <set>
 #include <unordered_map>
@@ -220,10 +221,25 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  outs() << "Inter-Function Analysis" << "\n";
-  errs() << module->getFunctionList().size() << " function(s)\n";
+  outs() << "Inter-Procedural Analysis" << "\n";
+  outs() << module->getFunctionList().size() << " function(s)\n";
+  auto start = std::chrono::high_resolution_clock::now();
+
   addReachable(mainFunc);
-  errs() << "Solving...\n";
+  auto checkpoint = std::chrono::high_resolution_clock::now();
+
+  // outs() << "Solving...\n";
   solve();
+  auto end = std::chrono::high_resolution_clock::now();
+
+  auto duration =
+      std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  outs() << "Analysis time: " << duration.count() << " us\n";
+  duration =
+      std::chrono::duration_cast<std::chrono::microseconds>(end - checkpoint);
+  outs() << "Solve time: " << duration.count() << " us\n";
+
+#ifdef PRINT_RESULTS
   print();
+#endif
 }

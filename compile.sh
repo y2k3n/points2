@@ -4,4 +4,4 @@ clang++ -O3 -g p2-inter-dense.cpp `llvm-config --cxxflags --ldflags --system-lib
 
 # clang++ -O3 -g p2-inter.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core` -o p2-inter
 
-# clang++ -O3 p2.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core` -o p2
+clang++ -O3 p2.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core` -o p2
